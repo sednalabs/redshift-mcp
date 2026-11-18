@@ -6,7 +6,7 @@
 use crate::error::{AppError, AppResult};
 use serde_json::{json, Value};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AwsConfig {
     pub profile: Option<String>,
     pub region: Option<String>,
@@ -18,8 +18,29 @@ pub struct AwsConfig {
     pub api_timeout_secs: u64,
 }
 
+impl Default for AwsConfig {
+    fn default() -> Self {
+        Self {
+            profile: None,
+            region: None,
+            database: None,
+            cluster_id: None,
+            workgroup_name: None,
+            db_user: None,
+            secret_arn: None,
+            api_timeout_secs: 30,
+        }
+    }
+}
+
 impl AwsConfig {
     pub fn validate(&self) -> AppResult<()> {
+        if !(1..=60).contains(&self.api_timeout_secs) {
+            return Err(AppError::new(
+                "invalid_configuration",
+                "AWS API timeout must be within its documented bounds.",
+            ));
+        }
         if self.database.is_none() {
             return Err(AppError::new("configuration_required", "Set REDSHIFT_DATABASE and exactly one of REDSHIFT_WORKGROUP_NAME or REDSHIFT_CLUSTER_ID."));
         }
@@ -158,6 +179,21 @@ mod tests {
         let cfg = Config::from_lookup(|_| None).unwrap();
         assert!(cfg.aws.validate().is_err());
         assert_eq!(cfg.aws.posture()["configured"], false);
+    }
+
+    #[test]
+    fn default_api_timeout_is_valid_and_explicit_invalid_timeouts_are_rejected() {
+        let mut cfg = AwsConfig {
+            database: Some("analytics".into()),
+            workgroup_name: Some("workgroup".into()),
+            ..AwsConfig::default()
+        };
+        assert_eq!(cfg.api_timeout_secs, 30);
+        assert!(cfg.validate().is_ok());
+        for timeout in [0, 61] {
+            cfg.api_timeout_secs = timeout;
+            assert_eq!(cfg.validate().unwrap_err().code, "invalid_configuration");
+        }
     }
 
     #[test]

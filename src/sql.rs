@@ -16,11 +16,13 @@ use sqlparser::ast::{
 };
 use sqlparser::dialect::RedshiftSqlDialect;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::backend::SqlParameter;
 use crate::error::{AppError, AppResult};
 
 pub const MAX_SQL_BYTES: usize = 100_000;
+pub const MAX_SQL_TOKENS: usize = 1_024;
 const MAX_RECURSION: usize = 64;
 const MAX_AST_NODES: usize = 10_000;
 const MAX_PARAMETERS: usize = 100;
@@ -42,9 +44,10 @@ pub struct ValidatedSql {
 /// Validates one SELECT/WITH query or plain nonexecuting EXPLAIN of a query.
 ///
 /// # Errors
-/// Rejects oversized, malformed, unsupported or potentially mutating SQL, unknown
-/// function names, and invalid or mismatched named parameters. Errors never echo
-/// SQL, names, parameter values or parser diagnostics.
+/// Rejects SQL exceeding 100000 bytes or 1024 non-whitespace tokens, malformed,
+/// unsupported or potentially mutating SQL, unknown function names, and invalid
+/// or mismatched named parameters. Errors never echo SQL, names, parameter values
+/// or parser diagnostics.
 ///
 /// # Security
 /// Only this validator's named built-in function allowlist is admitted. Database
@@ -64,16 +67,31 @@ pub fn validate(sql: &str, parameters: &[SqlParameter]) -> AppResult<ValidatedSq
         ));
     }
     let supplied = validate_parameters(parameters)?;
-    let statements = Parser::new(&RedshiftSqlDialect {})
+    let dialect = RedshiftSqlDialect {};
+    let tokens = Tokenizer::new(&dialect, sql)
+        .tokenize_with_location()
+        .map_err(|_| invalid_sql())?;
+    // A parser recursion limit alone cannot bound left-associated ASTs built by
+    // a loop. Admit a conservative token budget before constructing any AST so
+    // parsing, visiting and dropping rejected trees all have bounded input size.
+    // Comments and whitespace do not add syntax; quoted strings are one token.
+    if tokens
+        .iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_)))
+        .take(MAX_SQL_TOKENS + 1)
+        .count()
+        > MAX_SQL_TOKENS
+    {
+        return Err(AppError::new(
+            "sql_complexity_limit",
+            "SQL exceeds the 1024-token syntax limit. Simplify the query or use a reviewed database view.",
+        ));
+    }
+    let statements = Parser::new(&dialect)
         .with_recursion_limit(MAX_RECURSION)
-        .try_with_sql(sql)
-        .and_then(|mut parser| parser.parse_statements())
-        .map_err(|_| {
-            AppError::new(
-                "invalid_sql",
-                "SQL could not be parsed within the supported Redshift grammar and nesting limit.",
-            )
-        })?;
+        .with_tokens_with_locations(tokens)
+        .parse_statements()
+        .map_err(|_| invalid_sql())?;
     if statements.len() != 1 {
         return Err(AppError::new(
             "single_statement_required",
@@ -100,6 +118,13 @@ pub fn validate(sql: &str, parameters: &[SqlParameter]) -> AppResult<ValidatedSq
         fingerprint: format!("{:x}", Sha256::digest(sql.as_bytes())),
         parameter_count: supplied.len(),
     })
+}
+
+fn invalid_sql() -> AppError {
+    AppError::new(
+        "invalid_sql",
+        "SQL could not be parsed within the supported Redshift grammar and nesting limit.",
+    )
 }
 
 fn valid_parameter_name(name: &str) -> bool {
@@ -570,6 +595,29 @@ mod tests {
         assert!(validate("SELECT 1", &parameters).is_err());
         let nested = format!("SELECT {}1{}", "(".repeat(100), ")".repeat(100));
         assert!(validate(&nested, &[]).is_err());
+    }
+
+    #[test]
+    fn bounds_lexical_complexity_before_building_an_ast() {
+        // SELECT, 512 literals and 511 commas consume exactly 1024 tokens.
+        let projection = vec!["1"; MAX_SQL_TOKENS / 2].join(",");
+        let at_limit = format!("SELECT {projection}");
+        assert!(validate(&at_limit, &[]).is_ok());
+        assert!(validate(&format!("{at_limit} /* ignored syntax */"), &[]).is_ok());
+        let error = validate(&format!("{at_limit}, 2"), &[]).unwrap_err();
+        assert_eq!(error.code, "sql_complexity_limit");
+        // The lexical bound also runs before parsing malformed excess syntax.
+        let error = validate(&format!("{at_limit},"), &[]).unwrap_err();
+        assert_eq!(error.code, "sql_complexity_limit");
+    }
+
+    #[test]
+    fn token_budget_does_not_count_literal_contents_or_comments_as_syntax() {
+        let literal = "SELECT , + :ignored ".repeat(MAX_SQL_TOKENS);
+        let comment = "SELECT , + :ignored ".repeat(MAX_SQL_TOKENS);
+        let sql = format!("SELECT '{literal}' /* {comment} */");
+        assert!(sql.len() < MAX_SQL_BYTES);
+        assert!(validate(&sql, &[]).is_ok());
     }
 
     #[test]
