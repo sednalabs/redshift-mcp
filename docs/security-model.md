@@ -52,7 +52,9 @@ continue until it finishes, is cancelled, or hits its statement timeout.
 check determines the terminal outcome; a query can finish while cancellation
 is in flight. An API timeout likewise leaves the outcome of a submitted
 operation uncertain. Submission uses a client token to make SDK retries of the
-same request idempotent, not to deduplicate separate user tool calls.
+same request idempotent. An optional `request_id` separately deduplicates
+matching tool submissions within this process while the query record remains
+available; it does not provide durable recovery after expiry or a restart.
 
 ## Results and errors
 

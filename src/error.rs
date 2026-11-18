@@ -13,7 +13,11 @@ pub struct AppError {
 
 impl AppError {
     pub fn new(code: &str, message: &str) -> Self {
-        Self { code: code.into(), message: message.into(), retryable: false }
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable: false,
+        }
     }
 
     pub fn retryable(mut self) -> Self {

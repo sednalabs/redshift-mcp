@@ -35,7 +35,11 @@ must not be inferred from mocked tests.
   toolkit checks and generated-application tests pass; hosted checks are running.
 - AWS adapter implementation passes 12 tests using the actual SDK with an
   in-memory HTTP fixture. SQL policy, configuration, MCP surface and Kiro docs
-  are present. The controller and full integrated verification are in progress.
+  are present. The controller and twelve-tool MCP surface are now implemented;
+  full integrated verification and independent review are in progress. This is
+  a draft checkpoint, with AWS wrapper review and schema rebaselining outstanding.
+  Local SQL-parser compilation exceeded available workspace memory, so hosted
+  CI provides the integrated compiler and test evidence.
 - Explicit `query_start`, `query_status`, `query_results`, and `query_cancel`
   avoid relying on undocumented client support for native MCP Tasks.
 - Ops tracking: `w19007`. The initial service errors recovered; progress and

@@ -150,7 +150,12 @@ MCP_TOOLKIT_UPDATE_TOOL_SNAPSHOTS=1 \
 ```
 
 The repository includes CI for Rust checks, dependency governance, CodeQL and
-coverage. Trusted pushes to `main` and version tags also build native Linux
+coverage. Rust baseline CI uploads the binary's canonical schema as a
+`tool-schema-<commit>` review artifact before running clippy and tests. This does
+not update or relax the committed snapshot contract; an outdated snapshot still
+fails the test until its intentional change is reviewed and committed.
+
+Trusted pushes to `main` and version tags also build native Linux
 x86_64/arm64, macOS x86_64/arm64 and Windows x86_64 artifacts. The release workflow
 verifies checksums, tool-schema parity and SBOMs before attesting artifacts. It
 does not create a GitHub Release or install binaries. Dependency policy is

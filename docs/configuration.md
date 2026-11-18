@@ -14,6 +14,7 @@ cluster. Target selection is operator configuration, not a tool argument.
 | `AWS_REGION` | AWS region. Otherwise the SDK's normal region provider chain applies. |
 | `REDSHIFT_DB_USER` | Optional provisioned-cluster database user for temporary credentials. Incompatible with Serverless or `REDSHIFT_SECRET_ARN`. |
 | `REDSHIFT_SECRET_ARN` | Optional Secrets Manager secret for database authentication. Incompatible with `REDSHIFT_DB_USER`. |
+| `REDSHIFT_TOOL_PROFILE` | `analytics` (default) for all tools, or `metadata` for discovery and local SQL validation only. |
 
 With neither `REDSHIFT_DB_USER` nor `REDSHIFT_SECRET_ARN`, the Data API uses the
 configured IAM identity for temporary database authentication. A Serverless
@@ -70,6 +71,11 @@ and [BatchExecuteStatement reference](https://docs.aws.amazon.com/redshift-data/
 | `REDSHIFT_MAX_CONCURRENT_QUERIES` | 4 | 1–32 | Maximum tracked queries running concurrently. |
 | `REDSHIFT_MAX_JOBS` | 128 | 1–1,024 | Maximum query records retained by the current process. |
 | `REDSHIFT_JOB_TTL_SECS` | 3,600 | 600–86,400 | Query-handle lifetime. |
+
+Uncertain submission or termination outcomes retain their query-concurrency
+slot until a terminal state is confirmed or the query record expires. This
+prevents transport failures from immediately freeing capacity for duplicate
+warehouse work. Cursor storage is also bounded and expires with a finite TTL.
 
 These bounds do not estimate warehouse cost. Redshift can scan substantial data
 to produce a small result. Keep queries selective and examine plans where

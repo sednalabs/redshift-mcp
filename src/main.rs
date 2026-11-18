@@ -3,8 +3,13 @@
 use mcp_toolkit::{
     client_config::{render_executable_client_config, ClientConfigFormat},
     doctor::inspect_project,
-    server::{stdio::StdioServerBuilder, tools::{render_tool_surface_command,
-        render_tool_surface_help, tool_surface_command_from_env, ToolSurfaceCommand}},
+    server::{
+        stdio::StdioServerBuilder,
+        tools::{
+            render_tool_surface_command, render_tool_surface_help, tool_surface_command_from_env,
+            ToolSurfaceCommand,
+        },
+    },
 };
 use redshift_mcp::{Config, RedshiftServer};
 
@@ -28,23 +33,36 @@ async fn run() -> MainResult {
         ToolSurfaceCommand::Help => print!("{}", render_tool_surface_help(BINARY_NAME)),
         ToolSurfaceCommand::PrintClientConfig => {
             // Never copy the caller's AWS environment into output.
-            print!("{}", render_executable_client_config(BINARY_NAME, &std::env::current_exe()?,
-                ClientConfigFormat::KiroJson, &[("REDSHIFT_TOOL_PROFILE", "analytics")])?);
+            print!(
+                "{}",
+                render_executable_client_config(
+                    BINARY_NAME,
+                    &std::env::current_exe()?,
+                    ClientConfigFormat::KiroJson,
+                    &[("REDSHIFT_TOOL_PROFILE", "analytics")]
+                )?
+            );
         }
         ToolSurfaceCommand::Doctor => {
             let report = inspect_project(std::env::current_dir()?);
             print!("{}", report.render());
-            if !report.ready() { return Err(std::io::Error::other("project checks failed").into()); }
+            if !report.ready() {
+                return Err(std::io::Error::other("project checks failed").into());
+            }
         }
         ToolSurfaceCommand::Serve => {
             let server = RedshiftServer::new(Config::from_env()?)?;
-            StdioServerBuilder::new().serve(server).await
+            StdioServerBuilder::new()
+                .serve(server)
+                .await
                 .map_err(|_| std::io::Error::other("MCP transport ended with an error"))?;
         }
         command => {
             let server = RedshiftServer::new(Config::from_env()?)?;
             let tools = server.active_tools()?;
-            if let Some(output) = render_tool_surface_command(command, &tools)? { print!("{output}"); }
+            if let Some(output) = render_tool_surface_command(command, &tools)? {
+                print!("{output}");
+            }
         }
     }
     Ok(())

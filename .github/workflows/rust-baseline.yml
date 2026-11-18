@@ -46,6 +46,21 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Capture canonical tool schema for review
+        shell: bash
+        run: |
+          mkdir -p target
+          cargo run --locked -- --print-tool-schema > target/tool_schema_snapshot.candidate.json
+
+      - name: Upload candidate tool schema
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tool-schema-${{ github.sha }}
+          path: target/tool_schema_snapshot.candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Run clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 

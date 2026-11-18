@@ -14,6 +14,7 @@ usage() {
 Usage: ./scripts/dependency_governance_check.sh [--bootstrap-tools]
 
 Checks:
+  Repository preflight: advisory exception ownership, locked versions and UTC expiry.
   1) rmcp SDK pinning
   2) cargo deny (advisories + licenses + bans + sources)
   3) cargo audit (RustSec)
@@ -70,8 +71,12 @@ ensure_cargo_subcommand_binary() {
   return 1
 }
 
-ensure_command cargo
 ensure_command python3
+
+echo "[repo] advisory exception scope and UTC expiry check"
+python3 "${ROOT_DIR}/scripts/advisory_exception_check.py"
+
+ensure_command cargo
 
 missing_tools=0
 ensure_cargo_subcommand_binary cargo-deny cargo-deny || missing_tools=1
