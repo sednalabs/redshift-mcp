@@ -23,6 +23,10 @@ Run the full check with:
 ./scripts/dependency_governance_check.sh
 ```
 
+The exception preflight requires Python 3.11 or later for standard-library TOML
+parsing. A missing prerequisite or invalid exception record stops the script
+before the audit and deny commands run.
+
 Use the stricter stale-dependency mode only when you want dependency freshness
 to block the lane:
 
@@ -33,6 +37,21 @@ STRICT_OUTDATED=1 ./scripts/dependency_governance_check.sh
 When you add a new direct dependency or make a major upgrade, include a short
 PR note that records why the crate is needed, which safer alternatives were
 considered, and how you would roll the change back.
+
+## Package-specific licence acceptance
+
+The locked `ar_archive_writer` **0.5.5** uses
+`Apache-2.0 WITH LLVM-exception`. It is a build dependency of `psm`, reached
+through `sqlparser`'s `recursive` and `stacker` dependencies. The package's
+`Cargo.toml` and bundled `LICENSE.txt` declare that expression; the source is
+maintained in [rust-lang/ar_archive_writer](https://github.com/rust-lang/ar_archive_writer).
+
+`deny.toml` accepts this expression only for that exact package version. This
+retains the parser's existing stack support without adding the expression to
+the repository-wide licence allowlist. A version change requires review of the
+package-specific acceptance. The unused scaffold exception for
+`webpki-root-certs` was removed because that package is absent from this lockfile.
+Source restrictions and all advisory checks remain in force.
 
 ## Temporary Chrono maintenance exception
 

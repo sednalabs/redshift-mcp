@@ -29,7 +29,11 @@ not supported. A parameter substitutes a value, not a table or column name.
 The maximum SQL length is 100,000 UTF-8 bytes. There are at most 100 distinct
 parameters; each value is at most 16,384 bytes, and all parameter names and
 values together are at most 100,000 bytes. The parser and visitor also limit
-nesting and syntax complexity to protect local processing.
+nesting and syntax complexity to protect local processing. Before constructing
+an AST, the validator admits at most 1,024 lexical tokens, excluding whitespace
+and comments. A quoted literal counts as one token regardless of its text
+length, while the overall byte limit still applies. Queries with very large
+generated projections or set-operation lists may need to be simplified.
 
 ## Function allowlist
 

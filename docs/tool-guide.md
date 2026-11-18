@@ -134,8 +134,11 @@ call `query_sql` to poll one pending query.
 ## Cancel
 
 `query_cancel` takes `query_id`. It requests cancellation only for a statement
-owned by this server process and returns its query view. Check `query_status`
-afterwards. AWS accepting cancellation does not prove that the statement
+owned by this server process and returns its query view. `cancel_requested`
+records the local request; `cancellation_accepted` records acceptance once known.
+A request cancelled before its first submission can become `aborted` locally
+without contacting the warehouse. Check `query_status` afterwards. For work
+already submitted, AWS accepting cancellation does not prove that the statement
 terminated before it finished.
 
 An API error, MCP disconnection or server restart does not itself stop SQL.

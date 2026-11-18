@@ -621,7 +621,10 @@ impl Inner {
         match self.bounded(self.backend.cancel(provider_id)).await {
             Ok(accepted) => lock(&job.data)?.view.cancellation_accepted = Some(accepted),
             Err(error) => {
-                lock(&job.data)?.view.error = Some(error.clone());
+                let mut data = lock(&job.data)?;
+                if !data.view.terminal() {
+                    data.view.error = Some(error.clone());
+                }
                 return Err(error);
             }
         }
@@ -637,6 +640,7 @@ async fn run_query(
     client_token: String,
     timeout_ms: u64,
 ) -> AppResult<()> {
+    let deadline = job.created_at + Duration::from_millis(timeout_ms);
     let mut provider_id = None;
     let mut submission_ambiguous = false;
     for attempt in 0..2 {
@@ -646,14 +650,39 @@ async fn run_query(
             data.view.cancellation_accepted = Some(true);
             return Ok(());
         }
-        match inner
-            .bounded(
+        if Instant::now() >= deadline {
+            if !submission_ambiguous {
+                let mut data = lock(&job.data)?;
+                data.view.state = "aborted".to_owned();
+                data.view.cancel_requested = true;
+                data.view.cancellation_accepted = Some(true);
+                data.view.error = Some(AppError::new(
+                    "query_deadline_exceeded",
+                    "The query deadline elapsed before submission. No caller SQL was submitted.",
+                ));
+                return Ok(());
+            }
+            break;
+        }
+        // Staged AWS session setup also consumes the logical query deadline.
+        // Dropping an overdue submission never claims the remote outcome is known.
+        let submitted = tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            inner.bounded(
                 inner
                     .backend
                     .submit(&sql, &parameters, &client_token, timeout_ms),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(AppError::new(
+                "aws_timeout",
+                "Submission exceeded the query deadline; its remote outcome may be unknown.",
             )
-            .await
-        {
+            .retryable())
+        });
+        match submitted {
             Ok(id) => {
                 provider_id = Some(id.clone());
                 let mut data = lock(&job.data)?;
@@ -681,7 +710,15 @@ async fn run_query(
         data.view.error = Some(AppError::new("submission_unknown", "AWS did not confirm submission after idempotent retries. The query may be running. Reusing this request ID returns the same handle; investigate before starting a new request."));
         return Ok(());
     };
-    let deadline = job.created_at + Duration::from_millis(timeout_ms);
+    monitor_query(inner, job, &provider_id, deadline).await
+}
+
+async fn monitor_query(
+    inner: &Inner,
+    job: &Job,
+    provider_id: &str,
+    deadline: Instant,
+) -> AppResult<()> {
     let confirmation_deadline = deadline + CANCELLATION_CONFIRMATION;
     loop {
         let mut view = job.snapshot()?;
@@ -694,19 +731,25 @@ async fn run_query(
         }
         if view.cancel_requested && view.cancellation_accepted != Some(true) {
             // Neither failed cancellation nor acceptance proves termination.
-            let _ = inner
-                .bounded(inner.cancel_provider(job, &provider_id))
-                .await;
+            let _ = inner.bounded(inner.cancel_provider(job, provider_id)).await;
         }
-        match inner.bounded(inner.backend.status(&provider_id)).await {
+        match inner.bounded(inner.backend.status(provider_id)).await {
             Ok(status) => apply_status(job, status)?,
-            Err(error) => lock(&job.data)?.view.error = Some(error),
+            Err(error) => {
+                let mut data = lock(&job.data)?;
+                if !data.view.terminal() {
+                    data.view.error = Some(error);
+                }
+            }
         }
         if job.snapshot()?.terminal() {
             return Ok(());
         }
         if Instant::now() >= confirmation_deadline {
             let mut data = lock(&job.data)?;
+            if data.view.terminal() {
+                return Ok(());
+            }
             data.view.state = "status_unknown".to_owned();
             data.view.error = Some(AppError::new("query_status_unknown", "The query deadline passed but AWS did not confirm termination. Capacity remains reserved; refresh credentials and check status or cancel again."));
             return Ok(());
@@ -785,6 +828,7 @@ mod tests {
         tokens: Mutex<Vec<String>>,
         state: Mutex<QueryState>,
         outcomes: Mutex<VecDeque<AppResult<String>>>,
+        submit_delay: Duration,
         result_tokens: Mutex<Vec<Option<String>>>,
         metadata_requests: Mutex<Vec<MetadataRequest>>,
         first_rows: Vec<Vec<Value>>,
@@ -802,6 +846,7 @@ mod tests {
                 tokens: Mutex::new(Vec::new()),
                 state: Mutex::new(QueryState::Finished),
                 outcomes: Mutex::new(VecDeque::new()),
+                submit_delay: Duration::ZERO,
                 result_tokens: Mutex::new(Vec::new()),
                 metadata_requests: Mutex::new(Vec::new()),
                 first_rows: vec![vec![json!(1)], vec![json!(2)], vec![json!(3)]],
@@ -831,6 +876,9 @@ mod tests {
         ) -> AppResult<String> {
             self.submits.fetch_add(1, Ordering::SeqCst);
             self.tokens.lock().unwrap().push(token.into());
+            if !self.submit_delay.is_zero() {
+                tokio::time::sleep(self.submit_delay).await;
+            }
             self.outcomes
                 .lock()
                 .unwrap()
@@ -1312,7 +1360,7 @@ mod tests {
             data: Mutex::new(JobData {
                 view: JobView {
                     query_id: query_id.clone(),
-                    state: "submitting".into(),
+                    state: "submitted".into(),
                     query_fingerprint: "fixture".into(),
                     submitted_at_unix_ms: 0,
                     duration_ns: None,
@@ -1323,7 +1371,7 @@ mod tests {
                     cancellation_accepted: None,
                     error: None,
                 },
-                provider_id: None,
+                provider_id: Some("provider-id".into()),
                 result_id: None,
             }),
             created_at: Instant::now() - Duration::from_secs(40),
@@ -1345,13 +1393,11 @@ mod tests {
             .unwrap()
             .jobs
             .insert(query_id.clone(), job.clone());
-        run_query(
+        monitor_query(
             &controller.inner,
             &job,
-            "SELECT 1".into(),
-            vec![],
-            "fixture-token".into(),
-            1,
+            "provider-id",
+            job.created_at + Duration::from_millis(1),
         )
         .await
         .unwrap();
@@ -1394,5 +1440,58 @@ mod tests {
         assert_eq!(failed.state, "failed");
         assert_eq!(failed.error.unwrap().code, "aws_credentials");
         assert_eq!(controller.inner.query_capacity.available_permits(), 4);
+    }
+
+    #[tokio::test]
+    async fn submission_setup_cannot_outlive_the_logical_deadline() {
+        let backend = Arc::new(FakeBackend {
+            submit_delay: Duration::from_secs(10),
+            ..FakeBackend::default()
+        });
+        let controller = Controller::new(config(), backend.clone()).unwrap();
+        let mut input = request(None);
+        input.timeout_ms = Some(100);
+        let started = controller.start(input).await.unwrap();
+        let outcome = controller.wait(&started.query_id, 1000).await.unwrap();
+        assert_eq!(outcome.state, "submission_unknown");
+        assert_eq!(backend.submits.load(Ordering::SeqCst), 1);
+        assert_eq!(controller.inner.query_capacity.available_permits(), 3);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_service_errors_retain_the_handle_and_query_capacity() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.outcomes.lock().unwrap().extend([
+            Err(AppError::new("aws_execution_unknown", "Unknown execution outcome.").retryable()),
+            Err(AppError::new("aws_error", "Unknown service outcome.").retryable()),
+        ]);
+        let mut config = config();
+        config.max_concurrent_queries = 1;
+        let controller = Controller::new(config, backend.clone()).unwrap();
+        let first = controller
+            .start(request(Some("execution-request")))
+            .await
+            .unwrap();
+        let outcome = controller.wait(&first.query_id, 1000).await.unwrap();
+        assert_eq!(outcome.state, "submission_unknown");
+        assert!(!outcome.terminal());
+        assert_eq!(
+            controller
+                .start(request(Some("execution-request")))
+                .await
+                .unwrap()
+                .query_id,
+            first.query_id
+        );
+        assert_eq!(
+            controller
+                .start(request(Some("new-request")))
+                .await
+                .unwrap_err()
+                .code,
+            "query_capacity"
+        );
+        assert_eq!(backend.submits.load(Ordering::SeqCst), 2);
+        assert_eq!(controller.inner.query_capacity.available_permits(), 0);
     }
 }

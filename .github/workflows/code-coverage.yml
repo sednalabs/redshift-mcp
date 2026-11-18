@@ -53,14 +53,6 @@ jobs:
           cargo llvm-cov --locked --all-targets --all-features \
             --cobertura --output-path coverage/redshift-mcp.xml
 
-      - name: Upload coverage to GitHub Code Quality
-        # actions/upload-code-coverage v1
-        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
-        with:
-          file: coverage/redshift-mcp.xml
-          language: Rust
-          label: code-coverage/redshift-mcp
-
       - name: Upload Cobertura report
         # actions/upload-artifact v7
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -68,3 +60,13 @@ jobs:
           name: rust-cobertura-coverage
           path: coverage/*.xml
           if-no-files-found: error
+
+      - name: Upload coverage to GitHub Code Quality
+        # Enable the service and repository variable before opting in.
+        if: ${{ vars.ENABLE_GITHUB_CODE_QUALITY == 'true' }}
+        # actions/upload-code-coverage v1
+        uses: actions/upload-code-coverage@abb5995db9e0199b0e2bb9dbd136fce4cb1ec4d3
+        with:
+          file: coverage/redshift-mcp.xml
+          language: Rust
+          label: code-coverage/redshift-mcp

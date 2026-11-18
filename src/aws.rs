@@ -1,14 +1,15 @@
 //! Redshift Data API adapter for a single immutable warehouse target.
 //!
 //! SDK configuration is loaded on first use so MCP startup needs no credentials.
-//! User queries run inside a server-owned read-only batch. Database grants remain
+//! User queries run in a verified server-owned read-only session. Database grants remain
 //! the access boundary; the server separately validates the SQL syntax it accepts.
 //! Raw AWS errors, SQL text and parameter values never cross this adapter boundary.
 
-use std::time::Duration;
+use std::{error::Error, time::Duration};
 
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_redshiftdata::{
     config::Region,
     error::{ProvideErrorMetadata, SdkError},
@@ -18,9 +19,10 @@ use aws_sdk_redshiftdata::{
     types::{ColumnMetadata, ExecutionMode, Field, ResultFormatString},
     Client,
 };
-use aws_smithy_types::timeout::TimeoutConfig;
+use aws_smithy_types::{retry::RetryConfig, timeout::TimeoutConfig};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
 use crate::{
@@ -32,8 +34,10 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-const QUERY_SUBSTATEMENT: usize = 3;
-const BATCH_LENGTH: usize = 4;
+const QUERY_SUBSTATEMENT: usize = 1;
+const BATCH_LENGTH: usize = 2;
+const SETUP_KEEPALIVE_SECS: i32 = 120;
+const DRAIN_KEEPALIVE_SECS: i32 = 1;
 const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
 pub struct AwsBackend {
@@ -79,6 +83,72 @@ impl AwsBackend {
             })
             .await
     }
+
+    async fn prepare_session(
+        &self,
+        client: &Client,
+        token: &str,
+        timeout_ms: u64,
+    ) -> AppResult<String> {
+        // AUTO_COMMIT is necessary to retain our explicit READ ONLY transaction.
+        // It also continues after a failed statement, so this batch contains only
+        // fixed setup SQL. Caller SQL is never sent until every setup child has
+        // been observed to finish successfully on this exact session.
+        let submitted = client
+            .batch_execute_statement()
+            .set_database(self.config.database.clone())
+            .set_cluster_identifier(self.config.cluster_id.clone())
+            .set_workgroup_name(self.config.workgroup_name.clone())
+            .set_db_user(self.config.db_user.clone())
+            .set_secret_arn(self.config.secret_arn.clone())
+            .execution_mode(ExecutionMode::AutoCommit)
+            .client_token(setup_token(token))
+            .session_keep_alive_seconds(SETUP_KEEPALIVE_SECS)
+            .sqls(format!("SET statement_timeout = {timeout_ms}"))
+            .sqls("BEGIN READ ONLY")
+            .customize()
+            .config_override(
+                aws_sdk_redshiftdata::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
+            .send()
+            .await
+            .map_err(provider_error)?;
+        let id = submitted
+            .id()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(unexpected_response)?;
+        let session = submitted
+            .session_id()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(unexpected_response)?;
+        loop {
+            let response = client
+                .describe_statement()
+                .id(id)
+                .send()
+                .await
+                .map_err(provider_error)?;
+            if response.id() != id || response.session_id().is_some_and(|value| value != session) {
+                return Err(unexpected_response());
+            }
+            let status = statement_status(&response)?;
+            match status.state {
+                QueryState::Finished => {
+                    if response.session_id() != Some(session) {
+                        return Err(unexpected_response());
+                    }
+                    return Ok(session.to_owned());
+                }
+                QueryState::Failed | QueryState::Aborted => {
+                    return Err(AppError::new(
+                        "query_setup_failed",
+                        "Redshift could not establish the read-only session and statement timeout. The caller query was not submitted. Check warehouse compatibility and permissions.",
+                    ));
+                }
+                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -108,24 +178,29 @@ impl Backend for AwsBackend {
                     .map_err(|_| AppError::new("invalid_parameter", "A SQL parameter is invalid."))
             })
             .collect::<AppResult<Vec<_>>>()?;
-        let response = self
-            .client()
-            .await?
+        let client = self.client().await?;
+        let session = self
+            .prepare_session(client, client_token, timeout_ms)
+            .await?;
+        let response = client
             .batch_execute_statement()
-            .set_database(self.config.database.clone())
-            .set_cluster_identifier(self.config.cluster_id.clone())
-            .set_workgroup_name(self.config.workgroup_name.clone())
-            .set_db_user(self.config.db_user.clone())
-            .set_secret_arn(self.config.secret_arn.clone())
+            // SessionId supplies the established target and authentication. The
+            // API rejects respecifying the connection fields for a reused session.
+            .session_id(session)
             .execution_mode(ExecutionMode::AutoCommit)
             .result_format(ResultFormatString::Json)
             .client_token(client_token)
-            .session_keep_alive_seconds(0)
-            .sqls(format!("SET statement_timeout = {timeout_ms}"))
-            .sqls("BEGIN READ ONLY")
+            .session_keep_alive_seconds(DRAIN_KEEPALIVE_SECS)
             .sqls(sql)
             .sqls("ROLLBACK")
             .set_parameters((!parameters.is_empty()).then_some(parameters))
+            // The controller tracks every submit retry and keeps ambiguous
+            // outcomes conservative. An invisible SDK retry could otherwise
+            // hide a lost response behind a later credential-resolution error.
+            .customize()
+            .config_override(
+                aws_sdk_redshiftdata::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
             .send()
             .await
             .map_err(provider_error)?;
@@ -304,6 +379,13 @@ fn nonempty_token(value: Option<&str>) -> Option<String> {
     value.filter(|token| !token.is_empty()).map(str::to_owned)
 }
 
+fn setup_token(client_token: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("redshift-mcp/setup/v1:{client_token}").as_bytes())
+    )
+}
+
 fn query_state(value: Option<&str>) -> AppResult<QueryState> {
     match value {
         Some("SUBMITTED") => Ok(QueryState::Submitted),
@@ -471,9 +553,22 @@ fn unexpected_response() -> AppError {
     .retryable()
 }
 
-fn provider_error<E: ProvideErrorMetadata>(error: SdkError<E>) -> AppError {
+fn provider_error<E: ProvideErrorMetadata + Error + 'static>(error: SdkError<E>) -> AppError {
     // Only a fixed code allowlist is inspected. Display/Debug can expose SQL,
     // parameter values, resource names, signed URLs, or credential diagnostics.
+    // The SDK reports failures during credential resolution as DispatchFailure,
+    // even though no HTTP request was sent. Distinguish them by type, never text.
+    let mut source: Option<&(dyn Error + 'static)> = Some(&error);
+    for _ in 0..16 {
+        let Some(current) = source else { break };
+        if current.downcast_ref::<CredentialsError>().is_some() {
+            return AppError::new(
+                "aws_credentials",
+                "AWS credentials are missing, invalid, or expired. Refresh the configured AWS profile or SSO session.",
+            );
+        }
+        source = current.source();
+    }
     if let Some(code) = error
         .as_service_error()
         .and_then(ProvideErrorMetadata::code)
@@ -511,7 +606,18 @@ fn provider_error<E: ProvideErrorMetadata>(error: SdkError<E>) -> AppError {
                 "AWS is temporarily unavailable. Retry the same operation.",
             )
             .retryable(),
-            _ => AppError::new("aws_error", "The AWS Data API operation failed."),
+            "BatchExecuteStatementException" | "ExecuteStatementException" => AppError::new(
+                "aws_execution_unknown",
+                "AWS reported an execution error without confirming the query outcome. Retry with the same request ID; do not start a new request.",
+            )
+            .retryable(),
+            // An unfamiliar service error is not evidence of a rejected submit.
+            // Only the explicit allowlist above may release a newly reserved job.
+            _ => AppError::new(
+                "aws_error",
+                "The AWS Data API operation failed and its remote outcome may be unknown. Retry the same operation.",
+            )
+            .retryable(),
         };
     }
     match error {
@@ -540,10 +646,14 @@ mod tests {
         config::Credentials,
         types::{StatementStatusString, StatusString, SubStatementData},
     };
-    use aws_smithy_http_client::test_util::{capture_request, CaptureRequestReceiver};
+    use aws_smithy_http_client::test_util::{
+        capture_request, CaptureRequestReceiver, ReplayEvent, StaticReplayClient,
+    };
     use aws_smithy_types::{body::SdkBody, retry::RetryConfig};
 
     const ID: &str = "b8878892-cb3d-4638-8dd1-970d74130d47";
+    const SETUP_ID: &str = "44444444-cb3d-4638-8dd1-970d74130d47";
+    const SESSION_ID: &str = "55555555-cb3d-4638-8dd1-970d74130d47";
 
     fn config() -> AwsConfig {
         AwsConfig {
@@ -592,9 +702,79 @@ mod tests {
             .expect("valid request JSON")
     }
 
+    fn sequence_fixture(responses: Vec<Value>) -> (AwsBackend, StaticReplayClient) {
+        response_sequence_fixture(responses.into_iter().map(|body| (200, body)).collect())
+    }
+
+    fn response_sequence_fixture(responses: Vec<(u16, Value)>) -> (AwsBackend, StaticReplayClient) {
+        let http_client = StaticReplayClient::new(
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    ReplayEvent::new(
+                        http::Request::builder()
+                            .uri("https://fixture.invalid/")
+                            .body(SdkBody::empty())
+                            .unwrap(),
+                        http::Response::builder()
+                            .status(status)
+                            .header("content-type", "application/x-amz-json-1.1")
+                            .body(SdkBody::from(body.to_string()))
+                            .unwrap(),
+                    )
+                })
+                .collect(),
+        );
+        let sdk_config = aws_sdk_redshiftdata::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("ap-southeast-2"))
+            .credentials_provider(Credentials::new(
+                "fixture-key",
+                "fixture-secret",
+                None,
+                None,
+                "fixture",
+            ))
+            .retry_config(RetryConfig::disabled())
+            .http_client(http_client.clone())
+            .build();
+        (
+            AwsBackend {
+                config: config(),
+                client: OnceCell::new_with(Some(Client::from_conf(sdk_config))),
+            },
+            http_client,
+        )
+    }
+
+    fn setup_complete() -> Value {
+        json!({
+            "Id":SETUP_ID,"SessionId":SESSION_ID,"Status":"FINISHED",
+            "SubStatements":[
+                {"Id":format!("{SETUP_ID}:1"),"Status":"FINISHED"},
+                {"Id":format!("{SETUP_ID}:2"),"Status":"FINISHED"}
+            ]
+        })
+    }
+
+    fn successful_sequence() -> Vec<Value> {
+        vec![
+            json!({"Id":SETUP_ID,"SessionId":SESSION_ID}),
+            setup_complete(),
+            json!({"Id":ID,"SessionId":SESSION_ID}),
+        ]
+    }
+
+    fn sequence_bodies(client: &StaticReplayClient) -> Vec<Value> {
+        client
+            .actual_requests()
+            .map(|request| serde_json::from_slice(request.body().bytes().unwrap()).unwrap())
+            .collect()
+    }
+
     #[tokio::test]
-    async fn submit_sends_read_only_batch_parameters_and_stable_token() {
-        let (backend, requests) = fixture(200, json!({"Id": ID}));
+    async fn submit_verifies_setup_before_sending_query_with_stable_tokens() {
+        let (backend, requests) = sequence_fixture(successful_sequence());
         let submitted = backend
             .submit(
                 "SELECT :value AS example",
@@ -608,34 +788,54 @@ mod tests {
             .await
             .expect("submitted");
         assert_eq!(submitted, ID);
-        let body = request_body(requests);
-        assert_eq!(body["WorkgroupName"], "warehouse");
-        assert_eq!(body["Database"], "analytics");
-        assert_eq!(body["ExecutionMode"], "AUTO_COMMIT");
-        assert_eq!(body["ClientToken"], "token-for-one-logical-submission");
-        assert_eq!(body["SessionKeepAliveSeconds"], 0);
-        assert_eq!(body["ResultFormat"], "JSON");
+        let bodies = sequence_bodies(&requests);
+        assert_eq!(bodies.len(), 3);
+        let setup = &bodies[0];
+        assert_eq!(setup["WorkgroupName"], "warehouse");
+        assert_eq!(setup["Database"], "analytics");
+        assert_eq!(setup["ExecutionMode"], "AUTO_COMMIT");
+        assert_eq!(
+            setup["ClientToken"],
+            setup_token("token-for-one-logical-submission")
+        );
+        assert_eq!(setup["SessionKeepAliveSeconds"], 120);
+        assert_eq!(
+            setup["Sqls"],
+            json!(["SET statement_timeout = 12000", "BEGIN READ ONLY"])
+        );
+        assert!(setup.get("Parameters").is_none());
+        assert!(setup.get("ClusterIdentifier").is_none());
+        assert!(setup.get("SecretArn").is_none());
+        assert!(setup.get("SessionId").is_none());
+        assert_eq!(bodies[1], json!({"Id": SETUP_ID}));
+        let body = &bodies[2];
         assert_eq!(
             body["Sqls"],
-            json!([
-                "SET statement_timeout = 12000",
-                "BEGIN READ ONLY",
-                "SELECT :value AS example",
-                "ROLLBACK"
-            ])
+            json!(["SELECT :value AS example", "ROLLBACK"])
         );
+        assert_eq!(body["ClientToken"], "token-for-one-logical-submission");
+        assert_eq!(body["SessionKeepAliveSeconds"], 1);
+        assert_eq!(body["ExecutionMode"], "AUTO_COMMIT");
+        assert_eq!(body["ResultFormat"], "JSON");
+        assert_eq!(body["SessionId"], SESSION_ID);
         assert_eq!(
             body["Parameters"],
             json!([{"name":"value", "value":"data-value"}])
         );
-        assert!(body.get("ClusterIdentifier").is_none());
-        assert!(body.get("SecretArn").is_none());
-        assert!(body.get("SessionId").is_none());
+        for key in [
+            "Database",
+            "WorkgroupName",
+            "ClusterIdentifier",
+            "SecretArn",
+            "DbUser",
+        ] {
+            assert!(body.get(key).is_none());
+        }
     }
 
     #[tokio::test]
     async fn provisioned_target_uses_configured_database_user() {
-        let (mut backend, requests) = fixture(200, json!({"Id": ID}));
+        let (mut backend, requests) = sequence_fixture(successful_sequence());
         backend.config.cluster_id = Some("provisioned-warehouse".to_owned());
         backend.config.workgroup_name = None;
         backend.config.db_user = Some("readonly".to_owned());
@@ -643,11 +843,127 @@ mod tests {
             .submit("SELECT 1", &[], "token", 1000)
             .await
             .expect("submitted");
-        let body = request_body(requests);
+        let bodies = sequence_bodies(&requests);
+        let body = &bodies[0];
         assert_eq!(body["ClusterIdentifier"], "provisioned-warehouse");
         assert_eq!(body["DbUser"], "readonly");
         assert!(body.get("WorkgroupName").is_none());
         assert!(body.get("Parameters").is_none());
+    }
+
+    #[tokio::test]
+    async fn either_failed_setup_child_prevents_transmission_of_caller_sql() {
+        for failed_child in 0..2 {
+            let mut setup = setup_complete();
+            // A successful final BEGIN must not hide an earlier failed SET.
+            setup["SubStatements"][failed_child]["Status"] = json!("FAILED");
+            setup["SubStatements"][failed_child]["Error"] = json!("sensitive provider detail");
+            let (backend, requests) = sequence_fixture(vec![
+                json!({"Id":SETUP_ID,"SessionId":SESSION_ID}),
+                setup,
+                json!({"Id":ID,"SessionId":SESSION_ID}),
+            ]);
+            let error = backend
+                .submit("SELECT :private_value", &[], "token", 1000)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "query_setup_failed");
+            assert!(!error.retryable);
+            let bodies = sequence_bodies(&requests);
+            assert_eq!(bodies.len(), 2);
+            assert!(!serde_json::to_string(&bodies)
+                .unwrap()
+                .contains("private_value"));
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_requires_complete_children_and_the_original_session() {
+        for invalid in 0..3 {
+            let mut setup = setup_complete();
+            match invalid {
+                0 => {
+                    setup["SubStatements"].as_array_mut().unwrap().pop();
+                }
+                1 => setup["SessionId"] = json!("unexpected-session"),
+                _ => setup["SubStatements"][0]["Status"] = json!("UNRECOGNISED"),
+            }
+            let (backend, requests) = sequence_fixture(vec![
+                json!({"Id":SETUP_ID,"SessionId":SESSION_ID}),
+                setup,
+                json!({"Id":ID,"SessionId":SESSION_ID}),
+            ]);
+            assert!(backend
+                .submit("SELECT 1", &[], "token", 1000)
+                .await
+                .is_err());
+            assert_eq!(sequence_bodies(&requests).len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn submission_retries_reuse_both_stage_tokens_and_the_exact_session() {
+        let mut responses = successful_sequence();
+        responses.extend(successful_sequence());
+        let (backend, requests) = sequence_fixture(responses);
+        for _ in 0..2 {
+            assert_eq!(
+                backend
+                    .submit("SELECT 1", &[], "logical-request", 1000)
+                    .await
+                    .unwrap(),
+                ID
+            );
+        }
+        let bodies = sequence_bodies(&requests);
+        assert_eq!(bodies.len(), 6);
+        assert_eq!(bodies[0], bodies[3]);
+        assert_eq!(bodies[1], bodies[4]);
+        assert_eq!(bodies[2], bodies[5]);
+        assert_ne!(bodies[0]["ClientToken"], bodies[2]["ClientToken"]);
+        assert_eq!(bodies[0]["ClientToken"].as_str().unwrap().len(), 64);
+    }
+
+    #[derive(Debug)]
+    struct UnavailableCredentials;
+
+    impl aws_credential_types::provider::ProvideCredentials for UnavailableCredentials {
+        fn provide_credentials<'a>(
+            &'a self,
+        ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+        where
+            Self: 'a,
+        {
+            aws_credential_types::provider::future::ProvideCredentials::ready(Err(
+                CredentialsError::provider_error(
+                    "fixture expired SSO diagnostic must remain private",
+                ),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_credentials_fail_definitively_without_an_http_request() {
+        let (http_client, requests) = capture_request(None);
+        let sdk_config = aws_sdk_redshiftdata::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("ap-southeast-2"))
+            .credentials_provider(UnavailableCredentials)
+            .retry_config(RetryConfig::disabled())
+            .http_client(http_client)
+            .build();
+        let backend = AwsBackend {
+            config: config(),
+            client: OnceCell::new_with(Some(Client::from_conf(sdk_config))),
+        };
+        let error = backend
+            .submit("SELECT 1", &[], "token", 1000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "aws_credentials");
+        assert!(!error.retryable);
+        assert!(!error.message.contains("fixture expired"));
+        requests.expect_no_request();
     }
 
     #[tokio::test]
@@ -668,6 +984,38 @@ mod tests {
         assert!(!serialised.contains("do-not-leak"));
         assert!(!serialised.contains("SELECT"));
         assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn execution_and_unknown_service_errors_do_not_imply_rejected_submission() {
+        for (service_code, expected_code) in [
+            ("BatchExecuteStatementException", "aws_execution_unknown"),
+            ("FutureServiceFailure", "aws_error"),
+        ] {
+            let (backend, requests) = response_sequence_fixture(vec![
+                (200, json!({"Id":SETUP_ID,"SessionId":SESSION_ID})),
+                (200, setup_complete()),
+                (
+                    400,
+                    json!({
+                        "__type":service_code,
+                        "message":"Sensitive provider execution diagnostic",
+                        "StatementId":ID,
+                    }),
+                ),
+            ]);
+            let error = backend
+                .submit("SELECT 1", &[], "same-logical-request", 1000)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, expected_code);
+            assert!(error.retryable);
+            assert!(!error.message.contains("Sensitive"));
+            assert!(!error.message.contains(ID));
+            let bodies = sequence_bodies(&requests);
+            assert_eq!(bodies.len(), 3);
+            assert_eq!(bodies[2]["Sqls"], json!(["SELECT 1", "ROLLBACK"]));
+        }
     }
 
     #[tokio::test]
@@ -708,7 +1056,7 @@ mod tests {
 
     #[tokio::test]
     async fn results_preserve_provider_pagination_and_column_metadata() {
-        let result_id = format!("{ID}:3");
+        let result_id = format!("{ID}:1");
         let (backend, requests) = fixture(
             200,
             json!({
@@ -759,7 +1107,7 @@ mod tests {
         let output = completed_batch();
         let status = statement_status(&output).expect("status");
         assert_eq!(status.state, QueryState::Finished);
-        assert_eq!(status.result_id, Some(format!("{ID}:3")));
+        assert_eq!(status.result_id, Some(format!("{ID}:1")));
         assert_eq!(status.duration_ns, Some(123));
         assert_eq!(status.result_rows, Some(2));
         assert_eq!(status.redshift_query_id, Some(100));
@@ -770,8 +1118,8 @@ mod tests {
     fn successful_rollback_cannot_hide_a_failed_statement() {
         let mut output = completed_batch();
         let children = output.sub_statements.as_mut().expect("children");
-        children[1].status = Some(StatementStatusString::Failed);
-        children[1].error = Some("Sensitive provider explanation".to_owned());
+        children[0].status = Some(StatementStatusString::Failed);
+        children[0].error = Some("Sensitive provider explanation".to_owned());
         let status = statement_status(&output).expect("status");
         assert_eq!(status.state, QueryState::Failed);
         assert!(status.result_id.is_none());

@@ -24,10 +24,14 @@ by both row count and serialized size. Opaque continuation cursors preserve
 unreturned rows from an AWS result page. Long queries return a handle rather
 than depending on a client's support for MCP Tasks.
 
-SQL execution is read-only: the service validates a single query, sets a
-statement timeout, and executes it inside a read-only transaction that is rolled
-back. Use a dedicated database identity with read-only grants as the access
-boundary. PR1 has no write/admin tools, persistent SQL sessions, or export tools.
+SQL execution is read-only: after local validation, the service establishes a
+private session and verifies that its statement timeout and `BEGIN READ ONLY`
+setup both succeeded before sending the caller's query. It then runs the query
+and `ROLLBACK` in that same session. Use a dedicated database identity with
+read-only grants as the access boundary. PR1 has no write/admin tools,
+caller-managed SQL sessions, or export tools. The
+[security model](docs/security-model.md#sql-execution) explains the two-stage
+submission and failure handling.
 
 ## Build
 
@@ -154,6 +158,14 @@ coverage. Rust baseline CI uploads the binary's canonical schema as a
 `tool-schema-<commit>` review artifact before running clippy and tests. This does
 not update or relax the committed snapshot contract; an outdated snapshot still
 fails the test until its intentional change is reviewed and committed.
+
+Coverage generation and the `rust-cobertura-coverage` artifact are required
+parts of CI. Uploading that report to GitHub Code Quality is optional:
+[enable Code Quality for the repository](https://docs.github.com/en/code-security/how-tos/maintain-quality-code/enable-code-quality),
+then set the repository Actions variable
+`ENABLE_GITHUB_CODE_QUALITY` to `true`. Without that explicit opt-in, CI skips
+only the external reporting step. When enabled, upload failures still fail the
+job; test and report-generation failures always fail it.
 
 Trusted pushes to `main` and version tags also build native Linux
 x86_64/arm64, macOS x86_64/arm64 and Windows x86_64 artifacts. The release workflow

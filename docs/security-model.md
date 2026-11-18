@@ -18,11 +18,34 @@ match the data permitted in that workflow.
 
 ## SQL execution
 
-The server structurally validates a single supported read-only statement before
-submission. It sets a bounded `statement_timeout`, opens a read-only transaction,
-executes the query and rolls back through the Data API batch interface. There
-is no fallback that removes the read-only transaction when batch execution is
-unavailable.
+The server structurally validates a single supported read-only statement, then
+uses two separate Data API submissions in a private session owned by the server:
+
+- The setup batch contains only fixed `SET statement_timeout = <milliseconds>`
+  and `BEGIN READ ONLY` statements. It uses the configured target and
+  authentication, `AUTO_COMMIT`, a deterministic setup client token, and a
+  120-second session idle timeout. The adapter polls `DescribeStatement` and
+  requires both expected setup children to finish successfully, with the same
+  session identifier, before it sends any caller SQL.
+- Only after verified setup does the query batch submit the caller's SQL and
+  `ROLLBACK`. It reuses that session identifier, omits target/authentication
+  fields, preserves the query's stable client token and separate named
+  parameters, and reduces the session idle timeout to one second.
+
+A failed, incomplete or uncertain setup prevents caller SQL submission. There
+is no fallback that removes the read-only transaction. AWS documents that
+`AUTO_COMMIT` can continue after an individual statement fails; this is why
+setup and caller SQL must be separate requests with a successful verification
+between them. See the
+[batch execution modes](https://docs.aws.amazon.com/redshift-data/latest/APIReference/API_BatchExecuteStatement.html),
+[session reuse behavior](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html)
+and [`BEGIN READ ONLY`](https://docs.aws.amazon.com/redshift/latest/dg/r_BEGIN.html).
+
+Session identifiers remain private and cannot be supplied through a tool.
+Each query gets its own session; later tool calls cannot run arbitrary SQL in
+it. If submission or cleanup cannot be confirmed, the requested idle timeout
+bounds how long an unused session stays available. An idle timeout is separate
+from the warehouse statement timeout and is not proof that running work stopped.
 
 The [structural check and function allowlist](sql-compatibility.md) reject write
 and transaction-control statements. The check is
@@ -32,7 +55,7 @@ permissions must also exclude functions or other capabilities that should not
 be available to this identity. The dedicated explain tool requests a plan;
 it does not offer an execution-analysis mode.
 
-PR1 provides no data modification, schema changes, persistent SQL sessions,
+PR1 provides no data modification, schema changes, caller-managed SQL sessions,
 S3 `UNLOAD`, or local-file export tool. Query parameters are separate AWS named
 parameters; the server does not interpolate their values into the SQL string.
 
@@ -43,15 +66,22 @@ submitted through this process. A caller cannot pass an arbitrary AWS statement
 ID to inspect, retrieve or cancel another query. Continuation cursors are opaque
 and bound to their operation and query or metadata request.
 
+This process-level ownership does not isolate other AWS users who can assume
+the same IAM role. Apply the statement- and session-owner IAM restrictions
+described in [configuration](configuration.md#aws-and-database-permissions)
+when sharing a role across people.
+
 Handles and cursors have finite lifetimes and bounded storage. They are not
 durable across restarts. Restarting the process or closing the MCP client is
 not proof of warehouse cancellation. Once AWS accepts a statement, it can
 continue until it finishes, is cancelled, or hits its statement timeout.
 
-`query_cancel` reports whether AWS accepted the request. A subsequent status
+`query_cancel` records a local cancellation request and calls AWS once a
+statement identifier is available. Cancellation before the first submission
+can terminate locally without executing SQL. Otherwise, a subsequent status
 check determines the terminal outcome; a query can finish while cancellation
 is in flight. An API timeout likewise leaves the outcome of a submitted
-operation uncertain. Submission uses a client token to make SDK retries of the
+operation uncertain. Submission uses stable client tokens to make retries of the
 same request idempotent. An optional `request_id` separately deduplicates
 matching tool submissions within this process while the query record remains
 available; it does not provide durable recovery after expiry or a restart.

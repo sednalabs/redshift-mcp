@@ -40,6 +40,12 @@ tools: `BatchExecuteStatement`, `DescribeStatement`, `GetStatementResult`,
 `CancelStatement`, `ListDatabases`, `ListSchemas`, `ListTables` and
 `DescribeTable` under the `redshift-data` service prefix.
 
+Queries use `BatchExecuteStatement` twice: first to establish and verify the
+fixed read-only session setup, then to submit the query and `ROLLBACK` in that
+session. This uses the same actions listed above; it does not require a
+session-discovery or administrative API. The session remains bound to the
+configured target and authenticated database identity.
+
 Additional authentication permissions depend on your chosen mode:
 
 | Mode | Authentication API permission |
@@ -54,6 +60,15 @@ The server does not request control-plane cluster discovery. AWS permissions to
 call the Data API and database grants to read tables are separate requirements.
 Use a dedicated database principal with only the required schema/table/view
 access. A missing IAM grant is not a reason to broaden the database identity.
+
+For a role shared across people, AWS recommends distinct role session names and
+owner conditions. Restrict `DescribeStatement`, `GetStatementResult` and
+`CancelStatement` with `redshift-data:statement-owner-iam-userid`, and session
+reuse through `BatchExecuteStatement` with
+`redshift-data:session-owner-iam-userid`, compared with `${aws:userid}` as shown
+in [AWS's IAM configuration guide](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-iam.html).
+The MCP's private handles restrict its own tool surface; they do not replace
+AWS authorization for callers using the Data API independently.
 
 The authoritative API and IAM details are in AWS's
 [Data API guide](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html),
