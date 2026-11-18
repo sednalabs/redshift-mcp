@@ -3,8 +3,8 @@
 ## Delivery contract
 
 Create and merge the first implementation PR in `sednalabs/redshift-mcp`.
-First improve `sednalabs/mcp-toolkit-rs` scaffolding, land that upstream PR,
-then generate this server from that revision and pin the resulting dependency.
+First improve `sednalabs/mcp-toolkit-rs` scaffolding, generate this server with
+those improvements, and pin the final dependency to the merged upstream commit.
 
 The initial server is a native Rust stdio executable with one configured Redshift
 target, lazy AWS authentication, read-only SQL, metadata discovery, asynchronous
@@ -27,23 +27,34 @@ must not be inferred from mocked tests.
 | Server | Configuration, SQL policy, job ownership, bounded cursors, MCP surface | `feat/pr1-kiro-redshift` |
 | Client and delivery | Kiro configuration, documentation, CI, independent review | `feat/pr1-kiro-redshift` |
 
-## Checkpoint
+## Implementation and verification
 
 - Repository baseline: `cfd25f52ac89d4c0ec0eff23cbf6fad662a8f81d` (licence only).
-- Toolkit improvements are in PR368. The improved generator created this repository
-  with a pinned toolkit dependency and preserved its original licence. Local
-  toolkit checks and generated-application tests pass; hosted checks are running.
-- AWS adapter implementation passes 12 tests using the actual SDK with an
-  in-memory HTTP fixture. SQL policy, configuration, MCP surface and Kiro docs
-  are present. The controller and twelve-tool MCP surface are now implemented;
-  full integrated verification and independent review are in progress. This is
-  a draft checkpoint, with AWS wrapper review and schema rebaselining outstanding.
-  Local SQL-parser compilation exceeded available workspace memory, so hosted
-  CI provides the integrated compiler and test evidence.
+- [Toolkit PR368](https://github.com/sednalabs/mcp-toolkit-rs/pull/368) adds
+  immutable Git pins with exact crate versions, Kiro JSON configuration, safe
+  existing-repository generation, and portable coverage defaults. The improved
+  generator created this repository and preserved its original licence.
+- The twelve-tool surface, strict metadata profile, SQL admission policy,
+  owned query lifecycle, scoped cursors and Kiro configuration are implemented.
+  The canonical schema and dependency graph are committed under `spec/` and
+  `Cargo.lock`.
+- Hosted validation covers 68 Rust tests: 60 unit tests, two catalogue contracts,
+  five real executable stdio/CLI tests and one strict schema snapshot. The unit
+  suite includes 17 actual-SDK HTTP fixtures and 18 lifecycle/pagination tests.
+  Formatting, strict Clippy, dependency governance, coverage generation and
+  CodeQL run in CI. See [PR1](https://github.com/sednalabs/redshift-mcp/pull/1)
+  for checks on the precise candidate commit.
+- Independent review corrected AWS batch setup semantics and ambiguous service
+  errors. Only fixed setup SQL is transmitted initially; every setup child and
+  the private session are verified before caller SQL is sent. Unknown execution
+  outcomes retain capacity, and stale polls cannot overwrite terminal outcomes.
 - Explicit `query_start`, `query_status`, `query_results`, and `query_cancel`
   avoid relying on undocumented client support for native MCP Tasks.
-- Ops tracking: `w19007`. The initial service errors recovered; progress and
-  recovery references are recorded there. Redshift PR: #1; toolkit PR: #368.
+- Ops tracking: `w19007` records delivery and remote recovery checkpoints.
+  `w19008` tracks removal of the exact, expiring Chrono maintenance exception.
+- Automated tests use deterministic backends and actual SDK request/response
+  fixtures. No live warehouse or installed Kiro application validation is
+  represented by these results.
 
 ## Operating boundaries
 
