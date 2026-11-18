@@ -167,6 +167,11 @@ then set the repository Actions variable
 only the external reporting step. When enabled, upload failures still fail the
 job; test and report-generation failures always fail it.
 
+Pull requests build the server on all five release targets with Rust 1.99.0
+and the committed lockfile, then verify its CLI tool inventory and schema
+without AWS credentials. These compatibility checks do not publish or attest
+release artifacts.
+
 Trusted pushes to `main` and version tags also build native Linux
 x86_64/arm64, macOS x86_64/arm64 and Windows x86_64 artifacts. The release workflow
 verifies checksums, tool-schema parity and SBOMs before attesting artifacts. It
