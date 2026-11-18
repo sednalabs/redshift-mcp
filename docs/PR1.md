@@ -30,13 +30,16 @@ must not be inferred from mocked tests.
 ## Checkpoint
 
 - Repository baseline: `cfd25f52ac89d4c0ec0eff23cbf6fad662a8f81d` (licence only).
-- Toolkit enhancement implementation is undergoing tests. Server generation waits
-  for the improved generator; final Cargo dependencies will use its landed SHA.
-- AWS adapter is being prepared against the current official SDK/API contract.
+- Toolkit improvements are in PR368. The improved generator created this repository
+  with a pinned toolkit dependency and preserved its original licence. Local
+  toolkit checks and generated-application tests pass; hosted checks are running.
+- AWS adapter implementation passes 12 tests using the actual SDK with an
+  in-memory HTTP fixture. SQL policy, configuration, MCP surface and Kiro docs
+  are present. The controller and full integrated verification are in progress.
 - Explicit `query_start`, `query_status`, `query_results`, and `query_cancel`
   avoid relying on undocumented client support for native MCP Tasks.
-- Ops tracking was attempted; Ops DAS returned database-pool and deadline errors.
-  Retry tracking at the next milestone. No Ops work-item ID has been created yet.
+- Ops tracking: `w19007`. The initial service errors recovered; progress and
+  recovery references are recorded there. Redshift PR: #1; toolkit PR: #368.
 
 ## Operating boundaries
 

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "redshift": {
+      "command": "/absolute/path/to/redshift-mcp",
+      "args": [],
+      "env": {
+        "AWS_PROFILE": "redshift-readonly",
+        "AWS_REGION": "ap-southeast-2",
+        "REDSHIFT_DATABASE": "analytics",
+        "REDSHIFT_WORKGROUP_NAME": "your-workgroup"
+      },
+      "disabled": false,
+      "autoApprove": [],
+      "disabledTools": []
+    }
+  }
+}
