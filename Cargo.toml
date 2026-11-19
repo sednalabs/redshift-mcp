@@ -1,0 +1,44 @@
+[workspace]
+
+[package]
+name = "redshift-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+description = "Local read-only Amazon Redshift MCP server for Kiro and other stdio clients."
+repository = "https://github.com/sednalabs/redshift-mcp"
+
+[dependencies]
+mcp-toolkit = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20", features = ["server-stdio"] }
+mcp-toolkit-core = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
+async-trait = "0.1.92"
+aws-config = "1.13.3"
+aws-credential-types = "1.3.1"
+aws-sdk-redshiftdata = { version = "=1.128.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-types = "1.9.4"
+base64 = "0.22.1"
+sha2 = "0.10.9"
+sqlparser = { version = "=0.64.0", features = ["visitor"] }
+uuid = { version = "1.19.0", features = ["v4"] }
+
+[dev-dependencies]
+mcp-toolkit-testing = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20" }
+tempfile = "=3.27.0"
+aws-smithy-http-client = { version = "1.5.2", features = ["test-util"] }
+http = "1"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+# Cargo does not inherit the toolkit root patch into generated applications.
+[patch.crates-io]
+rmcp = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.
+rmcp-macros = { git = "https://github.com/sednalabs/rust-sdk", rev = "31e83f4f752001d2afc386254a4d17b5eab5f419" } # DevSkim: ignore DS173237 because this immutable public commit ID is source identity, not a credential.

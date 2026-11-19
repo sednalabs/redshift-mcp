@@ -1,0 +1,68 @@
+name: rust-baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: rust-baseline::${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-baseline:
+    name: Run targeted Rust baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        # actions/checkout v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Enforce standard GitHub-hosted runner labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/workflow_runner_policy_check.py --self-test
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        # swatinem/rust-cache v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Capture canonical tool schema for review
+        shell: bash
+        run: |
+          mkdir -p target
+          cargo run --locked -- --print-tool-schema > target/tool_schema_snapshot.candidate.json
+
+      - name: Upload candidate tool schema
+        # actions/upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tool-schema-${{ github.sha }}
+          path: target/tool_schema_snapshot.candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --all-targets --all-features

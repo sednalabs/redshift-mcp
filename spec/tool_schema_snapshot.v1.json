@@ -1,0 +1,536 @@
+{
+  "schema": "mcp_tool_schema_snapshot",
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Report redacted local configuration. Set verify=true to check AWS metadata access; local status alone does not prove database connectivity.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "verify": {
+            "default": false,
+            "description": "When true, verify AWS access with a bounded metadata request. Default false is local only.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "connection_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Submit plain EXPLAIN for a SELECT/WITH query and return a query handle. Supply SQL without the EXPLAIN prefix. Retrieve the plan through query_status and query_results; no ANALYZE execution mode is supported.",
+      "inputSchema": {
+        "$defs": {
+          "ParameterInput": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Named placeholder without its leading colon; names are case-sensitive.",
+                "type": "string"
+              },
+              "value": {
+                "description": "Nonempty string value. Use a SQL cast when a type is required.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "parameters": {
+            "items": {
+              "$ref": "#/$defs/ParameterInput"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Optional stable request key for retrying the same submission within this process.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sql": {
+            "description": "One supported read-only SQL query. Do not submit multiple statements.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "description": "Optional warehouse statement timeout in milliseconds, capped by operator configuration.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "explain_query"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Describe columns for one exact schema and table/view name, with type, nullability and precision metadata. Continue for wide objects using the cursor.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Exact table or view name, not a LIKE pattern.",
+            "type": "string"
+          },
+          "schema": {
+            "description": "Exact schema name, not a LIKE pattern.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "get_object_details"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List accessible databases on the configured target. Queries remain bound to the operator-configured database. Continue using the returned cursor.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque cursor from this same operation and server process.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Maximum items in this page, bounded by the operator's configured row limit.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_databases"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List tables and views in the configured database. schema and pattern are SQL LIKE patterns, not exact identifiers; percent and underscore are wildcards.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pattern": {
+            "description": "Optional object name LIKE pattern; percent and underscore are wildcards.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "description": "Optional schema LIKE pattern; percent and underscore are wildcards.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_objects"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List accessible schemas in the configured database, optionally filtered by an SQL LIKE pattern. Percent and underscore are wildcards.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pattern": {
+            "description": "Optional AWS SQL LIKE schema pattern; percent and underscore are wildcards.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_schemas"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Request cancellation of a query owned by this server process. This changes query state; accepted cancellation is not confirmed termination. Check query_status afterwards.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "query_id": {
+            "description": "Opaque query handle returned by this server process, never an AWS statement ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_id"
+        ],
+        "type": "object"
+      },
+      "name": "query_cancel"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Fetch a bounded tuple-row page from a finished query. Preserve the query_id and use the returned cursor to continue without skipping rows or executing the SQL again.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque continuation cursor returned for this query.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Maximum rows in this page, bounded by operator configuration.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_id"
+        ],
+        "type": "object"
+      },
+      "name": "query_results"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Submit a read-only query, wait briefly, and return its handle and state. A finished query also includes the first bounded result page. Default wait is 1000 ms; maximum 10000 ms.",
+      "inputSchema": {
+        "$defs": {
+          "ParameterInput": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Named placeholder without its leading colon; names are case-sensitive.",
+                "type": "string"
+              },
+              "value": {
+                "description": "Nonempty string value. Use a SQL cast when a type is required.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum rows in the first page if the query finishes within the wait.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/$defs/ParameterInput"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sql": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "wait_ms": {
+            "default": 1000,
+            "description": "Brief wait after submission: default 1000 ms, maximum 10000 ms. Pending work returns a handle.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "query_sql"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Submit a single read-only query and return a private process-local query handle. Use a stable request_id to retry the same submission; poll status, retrieve pages, or cancel using the handle.",
+      "inputSchema": {
+        "$defs": {
+          "ParameterInput": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Named placeholder without its leading colon; names are case-sensitive.",
+                "type": "string"
+              },
+              "value": {
+                "description": "Nonempty string value. Use a SQL cast when a type is required.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "parameters": {
+            "items": {
+              "$ref": "#/$defs/ParameterInput"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Optional stable request key for retrying the same submission within this process.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sql": {
+            "description": "One supported read-only SQL query. Do not submit multiple statements.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "description": "Optional warehouse statement timeout in milliseconds, capped by operator configuration.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "query_start"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Inspect a query submitted by this server process. Pending, finished, failed and aborted are distinct states; a transport timeout does not mean the query stopped.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "query_id": {
+            "description": "Opaque query handle returned by this server process, never an AWS statement ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_id"
+        ],
+        "type": "object"
+      },
+      "name": "query_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Validate one read-only Redshift query and its named parameters locally. This checks supported syntax and the function allowlist, not database objects, permissions or execution cost.",
+      "inputSchema": {
+        "$defs": {
+          "ParameterInput": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Named placeholder without its leading colon; names are case-sensitive.",
+                "type": "string"
+              },
+              "value": {
+                "description": "Nonempty string value. Use a SQL cast when a type is required.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "parameters": {
+            "description": "Bind every distinct :name placeholder once. Values must be nonempty strings.",
+            "items": {
+              "$ref": "#/$defs/ParameterInput"
+            },
+            "type": "array"
+          },
+          "sql": {
+            "description": "One SELECT/WITH query or plain EXPLAIN query in the supported Redshift dialect.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "name": "validate_sql"
+    }
+  ],
+  "version": 1
+}
