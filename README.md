@@ -35,7 +35,22 @@ submission and failure handling.
 
 ## Build
 
-Install Rust through [rustup](https://rustup.rs/), then build from the repository:
+Install Git, Rust through [rustup](https://rustup.rs/), and a native C/C++
+toolchain for the AWS SDK's AWS-LC TLS dependency:
+
+| Host | Native build prerequisites |
+| --- | --- |
+| Linux x86_64/arm64 | GCC or Clang with a linker and development headers; on Ubuntu, install `build-essential`. See [AWS-LC Linux requirements](https://aws.github.io/aws-lc-rs/requirements/linux.html). |
+| macOS Intel/Apple Silicon | Xcode Command Line Tools (`xcode-select --install`), providing the compiler, linker and macOS SDK. See [Rust installation](https://doc.rust-lang.org/book/ch01-01-installation.html). |
+| Windows x86_64 MSVC | Visual Studio or its Build Tools with **Desktop development with C++**, including MSVC and a Windows SDK. See [Rust's MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html). |
+
+For this lockfile's normal non-FIPS build, CMake, Go and bindgen are
+[not required](https://aws.github.io/aws-lc-rs/requirements/index.html).
+NASM is optional on Windows x86_64 because the locked Rustls dependency enables
+[AWS-LC's prebuilt assembly fallback](https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects).
+Install NASM on `PATH` to compile those assembly objects locally.
+
+Then build from the repository:
 
 ```bash
 git clone https://github.com/sednalabs/redshift-mcp.git
