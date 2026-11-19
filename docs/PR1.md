@@ -34,6 +34,9 @@ must not be inferred from mocked tests.
   immutable Git pins with exact crate versions, Kiro JSON configuration, safe
   existing-repository generation, and portable coverage defaults. The improved
   generator created this repository and preserved its original licence.
+  PR1 pins the [merged upstream commit
+  `6720c05f`](https://github.com/sednalabs/mcp-toolkit-rs/commit/6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20)
+  in its manifest and lockfile.
 - The twelve-tool surface, strict metadata profile, SQL admission policy,
   owned query lifecycle, scoped cursors and Kiro configuration are implemented.
   The canonical schema and dependency graph are committed under `spec/` and
@@ -44,6 +47,11 @@ must not be inferred from mocked tests.
   Formatting, strict Clippy, dependency governance, coverage generation and
   CodeQL run in CI. See [PR1](https://github.com/sednalabs/redshift-mcp/pull/1)
   for checks on the precise candidate commit.
+- Native compatibility checks build the actual release executable and inspect
+  its offline tool inventory and schema on Linux x86_64/arm64, macOS
+  Intel/Apple Silicon and Windows x86_64 before merge. Trusted main/tag builds
+  additionally verify checksums, cross-platform schema parity and SBOMs before
+  attestation. Explicit LF attributes preserve release-input bytes on checkout.
 - Independent review corrected AWS batch setup semantics and ambiguous service
   errors. Only fixed setup SQL is transmitted initially; every setup child and
   the private session are verified before caller SQL is sent. Unknown execution

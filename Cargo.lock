@@ -1402,7 +1402,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "mcp-toolkit"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=84e3d2781b98f63aa3ec3b5aac9593f80249a865#84e3d2781b98f63aa3ec3b5aac9593f80249a865"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20#6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20"
 dependencies = [
  "mcp-toolkit-core",
  "mcp-toolkit-server",
@@ -1415,7 +1415,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-core"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=84e3d2781b98f63aa3ec3b5aac9593f80249a865#84e3d2781b98f63aa3ec3b5aac9593f80249a865"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20#6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20"
 dependencies = [
  "base64 0.23.1",
  "rmcp",
@@ -1427,7 +1427,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-http"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=84e3d2781b98f63aa3ec3b5aac9593f80249a865#84e3d2781b98f63aa3ec3b5aac9593f80249a865"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20#6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20"
 dependencies = [
  "http 1.5.0",
  "serde",
@@ -1438,7 +1438,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-server"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=84e3d2781b98f63aa3ec3b5aac9593f80249a865#84e3d2781b98f63aa3ec3b5aac9593f80249a865"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20#6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20"
 dependencies = [
  "getrandom 0.4.3",
  "mcp-toolkit-core",
@@ -1451,7 +1451,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-testing"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=84e3d2781b98f63aa3ec3b5aac9593f80249a865#84e3d2781b98f63aa3ec3b5aac9593f80249a865"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20#6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20"
 dependencies = [
  "http 1.5.0",
  "mcp-toolkit-core",

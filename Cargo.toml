@@ -11,8 +11,8 @@ description = "Local read-only Amazon Redshift MCP server for Kiro and other std
 repository = "https://github.com/sednalabs/redshift-mcp"
 
 [dependencies]
-mcp-toolkit = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "84e3d2781b98f63aa3ec3b5aac9593f80249a865", features = ["server-stdio"] }
-mcp-toolkit-core = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "84e3d2781b98f63aa3ec3b5aac9593f80249a865" }
+mcp-toolkit = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20", features = ["server-stdio"] }
+mcp-toolkit-core = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
@@ -27,7 +27,7 @@ sqlparser = { version = "=0.64.0", features = ["visitor"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 
 [dev-dependencies]
-mcp-toolkit-testing = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "84e3d2781b98f63aa3ec3b5aac9593f80249a865" }
+mcp-toolkit-testing = { version = "=0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "6720c05f66876ddaa2e3c1c12f464e1e2b8b9f20" }
 tempfile = "=3.27.0"
 aws-smithy-http-client = { version = "1.5.2", features = ["test-util"] }
 http = "1"
