@@ -209,7 +209,9 @@ impl Controller {
         }
         // Named bindings are a map semantically. Validation has already rejected
         // duplicate names. Canonicalize their order for retries and submission.
-        request.parameters.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        request
+            .parameters
+            .sort_unstable_by(|a, b| a.name.cmp(&b.name));
         let digest = fingerprint(&json!({
             "sql": validated.sql, "parameters": request.parameters, "timeout_ms": timeout_ms,
         }))?;
@@ -508,8 +510,7 @@ impl Controller {
         // Bind the continuation to the full provider page, including columns
         // and other page metadata, rather than trusting an offset into a fresh
         // provider response. No original rows are retained in the cursor store.
-        let page_fingerprint =
-            fingerprint(&(&items, &next_token, make_payload(&[], None, true)))?;
+        let page_fingerprint = fingerprint(&(&items, &next_token, make_payload(&[], None, true)))?;
         if position.offset > 0
             && position.page_fingerprint.as_deref() != Some(page_fingerprint.as_str())
         {
@@ -1089,8 +1090,14 @@ mod tests {
         let backend = Arc::new(FakeBackend::default());
         let controller = Controller::new(config(), backend.clone()).unwrap();
         let done = completed(&controller).await;
-        let result = controller.results(&done.query_id, None, Some(1)).await.unwrap();
-        let metadata = controller.metadata(metadata_request(), None, Some(1)).await.unwrap();
+        let result = controller
+            .results(&done.query_id, None, Some(1))
+            .await
+            .unwrap();
+        let metadata = controller
+            .metadata(metadata_request(), None, Some(1))
+            .await
+            .unwrap();
 
         backend.change_page.store(true, Ordering::SeqCst);
         let error = controller
@@ -1099,7 +1106,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "invalid_provider_page");
         let error = controller
-            .metadata(metadata_request(), metadata["next_cursor"].as_str(), Some(1))
+            .metadata(
+                metadata_request(),
+                metadata["next_cursor"].as_str(),
+                Some(1),
+            )
             .await
             .unwrap_err();
         assert_eq!(error.code, "invalid_provider_page");
@@ -1115,12 +1126,9 @@ mod tests {
 
     #[test]
     fn partial_page_replay_binds_columns_and_next_token() {
-        let controller =
-            Controller::new(config(), Arc::new(FakeBackend::default())).unwrap();
+        let controller = Controller::new(config(), Arc::new(FakeBackend::default())).unwrap();
         let scope = controller.inner.scope("page-integrity").unwrap();
-        let payload = |rows: &[Value], cursor: Option<&str>, complete: bool| {
-            json!({"rows":rows,"columns":["original"],"next_cursor":cursor,"complete":complete})
-        };
+        let payload = |rows: &[Value], cursor: Option<&str>, complete: bool| json!({"rows":rows,"columns":["original"],"next_cursor":cursor,"complete":complete});
         let first = controller
             .paginate(
                 scope.clone(),
@@ -1131,7 +1139,9 @@ mod tests {
                 payload,
             )
             .unwrap();
-        let position = controller.position(&scope, first["next_cursor"].as_str()).unwrap();
+        let position = controller
+            .position(&scope, first["next_cursor"].as_str())
+            .unwrap();
         let error = controller
             .paginate(
                 scope.clone(),
@@ -1285,8 +1295,14 @@ mod tests {
         let mut input = request(Some("binding-order"));
         input.sql = "SELECT :a, :b".into();
         input.parameters = vec![
-            SqlParameter { name: "b".into(), value: "2".into() },
-            SqlParameter { name: "a".into(), value: "1".into() },
+            SqlParameter {
+                name: "b".into(),
+                value: "2".into(),
+            },
+            SqlParameter {
+                name: "a".into(),
+                value: "1".into(),
+            },
         ];
         let first = controller.start(input.clone()).await.unwrap();
         input.parameters.reverse();
@@ -1393,7 +1409,10 @@ mod tests {
         let controller = Controller::new(config(), backend.clone()).unwrap();
         let first = controller.start(request(None)).await.unwrap();
         submitted(&backend).await;
-        assert_eq!(controller.status(&first.query_id).await.unwrap().state, "started");
+        assert_eq!(
+            controller.status(&first.query_id).await.unwrap().state,
+            "started"
+        );
         let job = controller.inner.job(&first.query_id).unwrap();
         let mut older = backend.status("provider-id").await.unwrap();
         older.state = QueryState::Submitted;
@@ -1406,7 +1425,10 @@ mod tests {
         assert_eq!(current.state, "started");
         assert_eq!(current.duration_ns, Some(100));
         *backend.state.lock().unwrap() = QueryState::Finished;
-        assert_eq!(controller.status(&first.query_id).await.unwrap().state, "finished");
+        assert_eq!(
+            controller.status(&first.query_id).await.unwrap().state,
+            "finished"
+        );
     }
 
     #[tokio::test]

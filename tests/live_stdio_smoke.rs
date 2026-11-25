@@ -30,20 +30,30 @@ fn live_redshift_read_only_stdio_contract() {
         std::env::var("REDSHIFT_LIVE_SMOKE").as_deref() == Ok("1"),
         "Set REDSHIFT_LIVE_SMOKE=1 only for an approved synthetic-query smoke test"
     );
-    let mut process = StdioMcpProcess::start_legacy_with_client(
-        EXE,
-        "redshift-live-smoke",
-        "2025-11-25",
-    );
+    let mut process =
+        StdioMcpProcess::start_legacy_with_client(EXE, "redshift-live-smoke", "2025-11-25");
     let names = process.list_tool_names();
     assert!(
         names.iter().any(|name| name == "query_start"),
         "select the analytics tool profile"
     );
-    let status = call(&mut process, 10, "connection_status", json!({"verify":false}));
+    let status = call(
+        &mut process,
+        10,
+        "connection_status",
+        json!({"verify":false}),
+    );
     assert!(status["configured"] == true && status["verified"] == false);
-    let status = call(&mut process, 11, "connection_status", json!({"verify":true}));
-    assert!(status["verified"] == true, "metadata authorization was not verified");
+    let status = call(
+        &mut process,
+        11,
+        "connection_status",
+        json!({"verify":true}),
+    );
+    assert!(
+        status["verified"] == true,
+        "metadata authorization was not verified"
+    );
 
     let query = json!({
         "sql": "SELECT CAST(:first AS INTEGER) AS value UNION ALL SELECT 2 UNION ALL SELECT 3 ORDER BY 1",
@@ -65,7 +75,10 @@ fn live_redshift_read_only_stdio_contract() {
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut id = 14;
     loop {
-        assert!(Instant::now() < deadline, "synthetic query deadline expired");
+        assert!(
+            Instant::now() < deadline,
+            "synthetic query deadline expired"
+        );
         let status = call(&mut process, id, "query_status", json!({"query_id":handle}));
         id += 1;
         match status["state"].as_str() {
@@ -85,7 +98,10 @@ fn live_redshift_read_only_stdio_contract() {
             json!({"query_id":handle,"cursor":cursor,"limit":1}),
         );
         id += 1;
-        assert!(page["rows"] == json!([[expected]]), "synthetic row mismatch");
+        assert!(
+            page["rows"] == json!([[expected]]),
+            "synthetic row mismatch"
+        );
         assert!(page["returned_rows"] == 1);
         assert!(page["complete"] == (expected == 3));
         cursor = page["next_cursor"].as_str().map(str::to_owned);
