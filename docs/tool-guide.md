@@ -108,10 +108,16 @@ To continue, pass the returned `next_cursor` as the next call's `cursor`. Stop
 when `complete=true` and `next_cursor` is null. A page can
 end before the row limit because of the serialized-size budget. The controller
 keeps the remaining offset within the provider page so continuation does not
-skip rows. Do not rerun SQL merely to fetch the next page.
+skip rows. For a partial provider page, a private fingerprint binds the cursor
+to the observed rows, column metadata and provider continuation. If that page
+changes on replay, the server rejects the cursor rather than silently skipping
+or duplicating data. Restart pagination and discard the earlier partial result.
+Metadata pagination is not a transactional snapshot across distinct provider
+pages; this check only detects drift when replaying the same partial page.
+Do not rerun SQL merely to fetch the next page.
 
 Reusing a `request_id` returns the existing handle for the same trimmed SQL,
-binding array and timeout. Keep the binding order unchanged when retrying.
+named bindings and timeout, regardless of binding array order.
 Changed inputs with an existing key are rejected. Use a new key for a new
 execution. Request keys expire with the retained query record and are
 process-local; they are not a durable recovery mechanism after a restart.
