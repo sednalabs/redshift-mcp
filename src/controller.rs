@@ -127,6 +127,8 @@ pub struct Controller {
 struct PagePosition {
     provider_token: Option<String>,
     offset: usize,
+    // The same provider page must be replayed before applying a local offset.
+    page_fingerprint: Option<String>,
 }
 
 impl Controller {
@@ -188,7 +190,7 @@ impl Controller {
         Ok(posture)
     }
 
-    pub async fn start(&self, request: StartQuery) -> AppResult<JobView> {
+    pub async fn start(&self, mut request: StartQuery) -> AppResult<JobView> {
         self.config().aws.validate()?;
         let validated = sql::validate(&request.sql, &request.parameters)?;
         let timeout_ms = request
@@ -205,6 +207,11 @@ impl Controller {
         }) {
             return Err(AppError::new("invalid_request_id", "Request IDs must be nonempty text of at most 128 bytes without control characters."));
         }
+        // Named bindings are a map semantically. Validation has already rejected
+        // duplicate names. Canonicalize their order for retries and submission.
+        request
+            .parameters
+            .sort_unstable_by(|a, b| a.name.cmp(&b.name));
         let digest = fingerprint(&json!({
             "sql": validated.sql, "parameters": request.parameters, "timeout_ms": timeout_ms,
         }))?;
@@ -500,6 +507,18 @@ impl Controller {
                 "The provider page changed or repeated its continuation token. Restart pagination.",
             ));
         }
+        // Bind the continuation to the full provider page, including columns
+        // and other page metadata, rather than trusting an offset into a fresh
+        // provider response. No original rows are retained in the cursor store.
+        let page_fingerprint = fingerprint(&(&items, &next_token, make_payload(&[], None, true)))?;
+        if position.offset > 0
+            && position.page_fingerprint.as_deref() != Some(page_fingerprint.as_str())
+        {
+            return Err(AppError::new(
+                "invalid_provider_page",
+                "The provider page changed during continuation. Restart pagination.",
+            ));
+        }
         let mut end = position.offset;
         let last = position.offset.saturating_add(limit).min(items.len());
         while end < last {
@@ -522,11 +541,13 @@ impl Controller {
             Some(PagePosition {
                 provider_token: position.provider_token,
                 offset: end,
+                page_fingerprint: Some(page_fingerprint),
             })
         } else {
             next_token.map(|token| PagePosition {
                 provider_token: Some(token),
                 offset: 0,
+                page_fingerprint: None,
             })
         };
         let complete = next_position.is_none();
@@ -764,8 +785,15 @@ async fn monitor_query(
 fn apply_status(job: &Job, status: StatementStatus) -> AppResult<()> {
     {
         let mut data = lock(&job.data)?;
-        // An older concurrent poll cannot regress an observed terminal state.
-        if data.view.terminal() {
+        // Concurrent provider polls can complete out of order. Preserve both
+        // observed terminal states and known forward progress.
+        if data.view.terminal()
+            || matches!(
+                (data.view.state.as_str(), status.state),
+                ("picked", QueryState::Submitted)
+                    | ("started", QueryState::Submitted | QueryState::Picked)
+            )
+        {
             return Ok(());
         }
         data.view.state = match status.state {
@@ -791,7 +819,7 @@ fn lock<T>(mutex: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
     mutex.lock().map_err(|_| internal_error())
 }
 
-fn fingerprint(value: &Value) -> AppResult<String> {
+fn fingerprint(value: &impl Serialize) -> AppResult<String> {
     serde_json::to_vec(value)
         .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
         .map_err(|_| internal_error())
@@ -835,6 +863,7 @@ mod tests {
         second_rows: Vec<Vec<Value>>,
         columns: Vec<Column>,
         credentials_expired: AtomicBool,
+        change_page: AtomicBool,
         cancel_accepted: bool,
         cancel_state: QueryState,
     }
@@ -859,6 +888,7 @@ mod tests {
                     scale: None,
                 }],
                 credentials_expired: AtomicBool::new(false),
+                change_page: AtomicBool::new(false),
                 cancel_accepted: true,
                 cancel_state: QueryState::Aborted,
             }
@@ -911,7 +941,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(next_token.map(str::to_owned));
-            let (rows, next_token) = match next_token {
+            let (mut rows, next_token) = match next_token {
                 None => (
                     self.first_rows.clone(),
                     (!self.second_rows.is_empty()).then(|| "page-2".into()),
@@ -924,6 +954,9 @@ mod tests {
                     ))
                 }
             };
+            if self.change_page.load(Ordering::SeqCst) && !rows.is_empty() {
+                rows[0][0] = json!("changed");
+            }
             Ok(ResultPage {
                 columns: self.columns.clone(),
                 rows,
@@ -944,7 +977,11 @@ mod tests {
             }
             Ok(MetadataPage {
                 items: vec![
-                    json!({"schema":"one"}),
+                    if self.change_page.load(Ordering::SeqCst) {
+                        json!({"schema":"changed"})
+                    } else {
+                        json!({"schema":"one"})
+                    },
                     json!({"schema":"two"}),
                     json!({"schema":"three"}),
                 ],
@@ -1046,6 +1083,89 @@ mod tests {
             vec![None, None, None, Some("page-2".into())]
         );
         assert_eq!(backend.submits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn partial_page_replay_rejects_same_length_provider_drift() {
+        let backend = Arc::new(FakeBackend::default());
+        let controller = Controller::new(config(), backend.clone()).unwrap();
+        let done = completed(&controller).await;
+        let result = controller
+            .results(&done.query_id, None, Some(1))
+            .await
+            .unwrap();
+        let metadata = controller
+            .metadata(metadata_request(), None, Some(1))
+            .await
+            .unwrap();
+
+        backend.change_page.store(true, Ordering::SeqCst);
+        let error = controller
+            .results(&done.query_id, result["next_cursor"].as_str(), Some(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_provider_page");
+        let error = controller
+            .metadata(
+                metadata_request(),
+                metadata["next_cursor"].as_str(),
+                Some(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_provider_page");
+
+        // Rejected replay does not consume the cursor. A stable retry works.
+        backend.change_page.store(false, Ordering::SeqCst);
+        let retry = controller
+            .results(&done.query_id, result["next_cursor"].as_str(), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(retry["rows"], json!([[2]]));
+    }
+
+    #[test]
+    fn partial_page_replay_binds_columns_and_next_token() {
+        let controller = Controller::new(config(), Arc::new(FakeBackend::default())).unwrap();
+        let scope = controller.inner.scope("page-integrity").unwrap();
+        let payload = |rows: &[Value], cursor: Option<&str>, complete: bool| json!({"rows":rows,"columns":["original"],"next_cursor":cursor,"complete":complete});
+        let first = controller
+            .paginate(
+                scope.clone(),
+                PagePosition::default(),
+                vec![json!(1), json!(2)],
+                Some("next".into()),
+                1,
+                payload,
+            )
+            .unwrap();
+        let position = controller
+            .position(&scope, first["next_cursor"].as_str())
+            .unwrap();
+        let error = controller
+            .paginate(
+                scope.clone(),
+                position.clone(),
+                vec![json!(1), json!(2)],
+                Some("different".into()),
+                1,
+                payload,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_provider_page");
+        let error = controller
+            .paginate(
+                scope,
+                position,
+                vec![json!(1), json!(2)],
+                Some("next".into()),
+                1,
+                |rows, cursor, complete| {
+                    json!({"rows":rows,"columns":["changed"],"next_cursor":cursor,"complete":complete})
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_provider_page");
     }
 
     #[tokio::test]
@@ -1169,6 +1289,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reordered_named_bindings_reuse_the_same_request_handle() {
+        let backend = Arc::new(FakeBackend::default());
+        let controller = Controller::new(config(), backend.clone()).unwrap();
+        let mut input = request(Some("binding-order"));
+        input.sql = "SELECT :a, :b".into();
+        input.parameters = vec![
+            SqlParameter {
+                name: "b".into(),
+                value: "2".into(),
+            },
+            SqlParameter {
+                name: "a".into(),
+                value: "1".into(),
+            },
+        ];
+        let first = controller.start(input.clone()).await.unwrap();
+        input.parameters.reverse();
+        let retry = controller.start(input.clone()).await.unwrap();
+        assert_eq!(first.query_id, retry.query_id);
+        input.parameters[0].value = "different".into();
+        assert_eq!(
+            controller.start(input).await.unwrap_err().code,
+            "request_id_conflict"
+        );
+        controller.wait(&first.query_id, 1000).await.unwrap();
+        assert_eq!(backend.submits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn retries_use_the_same_provider_token_after_an_ambiguous_submit() {
         let backend = Arc::new(FakeBackend::default());
         backend
@@ -1249,6 +1398,37 @@ mod tests {
             "aborted"
         );
         assert_eq!(controller.inner.query_capacity.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn older_active_observations_cannot_regress_query_progress() {
+        let backend = Arc::new(FakeBackend {
+            state: Mutex::new(QueryState::Started),
+            ..FakeBackend::default()
+        });
+        let controller = Controller::new(config(), backend.clone()).unwrap();
+        let first = controller.start(request(None)).await.unwrap();
+        submitted(&backend).await;
+        assert_eq!(
+            controller.status(&first.query_id).await.unwrap().state,
+            "started"
+        );
+        let job = controller.inner.job(&first.query_id).unwrap();
+        let mut older = backend.status("provider-id").await.unwrap();
+        older.state = QueryState::Submitted;
+        older.duration_ns = Some(1);
+        apply_status(&job, older).unwrap();
+        let mut older = backend.status("provider-id").await.unwrap();
+        older.state = QueryState::Picked;
+        apply_status(&job, older).unwrap();
+        let current = job.snapshot().unwrap();
+        assert_eq!(current.state, "started");
+        assert_eq!(current.duration_ns, Some(100));
+        *backend.state.lock().unwrap() = QueryState::Finished;
+        assert_eq!(
+            controller.status(&first.query_id).await.unwrap().state,
+            "finished"
+        );
     }
 
     #[tokio::test]

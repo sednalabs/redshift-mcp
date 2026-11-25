@@ -152,6 +152,23 @@ real stdio. These tests do not use a live Redshift warehouse or a signed-in Kiro
 session. Verify those integrations in your own environment before relying on
 the server for warehouse work.
 
+An explicit, ignored live stdio test exercises the configured AWS target using
+only synthetic constant rows, a named binding, an idempotent retry and result
+pagination. Set the approved Redshift/AWS environment variables, use the
+analytics profile, and set a statement timeout of at least 30 seconds:
+
+```bash
+REDSHIFT_LIVE_SMOKE=1 cargo test --locked --test live_stdio_smoke -- --ignored
+```
+
+On PowerShell, set `$env:REDSHIFT_LIVE_SMOKE = "1"` before invoking the
+same Cargo command. The test verifies real metadata access and SQL execution
+through a legacy MCP stdio handshake; it does not launch or validate the Kiro
+application. It does not read business tables or print result payloads. It
+requires explicitly authorized AWS credentials and incurs normal query costs.
+On failure, the server's warehouse statement timeout remains the backstop;
+closing the test process is not proof of cancellation.
+
 Inspect the binary's tool surface without starting Kiro:
 
 ```bash

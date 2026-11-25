@@ -91,6 +91,11 @@ available; it does not provide durable recovery after expiry or a restart.
 Result pages have row and serialized-size bounds. An opaque cursor preserves
 the continuation when the server returns only part of an AWS page. The server
 does not silently clip cells or represent a partial page as a complete result.
+An internal fingerprint verifies that a replayed partial provider page has the
+same contents, metadata and continuation token before applying its saved offset.
+It retains no raw rows in cursor state, and rejects changes rather than returning
+an inconsistent continuation. This is not a snapshot guarantee for metadata
+across separate provider pages.
 Column type metadata accompanies tuple rows so duplicate column labels remain
 unambiguous and decimal/date/time values can retain their provider encoding.
 
